@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 | ZLink</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            200: '#c7d2fe',
+                            300: '#b5c4ff',
+                            400: '#cbd6ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            800: '#3730a3',
+                            900: '#312e81'
+                        }
+                    }
+                }
+            }
+        };
+    </script>
+    <script>
+        (function () {
+            var el = document.documentElement;
+            var stored = localStorage.getItem('theme');
+            var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            var theme = (stored === 'dark' || stored === 'light') ? stored : (prefersDark ? 'dark' : 'light');
+            if (theme === 'dark') {
+                el.classList.add('dark');
+            } else {
+                el.classList.remove('dark');
+            }
+        })();
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        :focus { outline: 3px solid rgba(124,58,237,0.15); outline-offset: 2px; }
+    </style>
+</head>
+<body class="h-full font-sans antialiased bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+<div class="min-h-full flex items-center justify-center px-4 py-16 sm:px-6 lg:px-8">
+    <div class="sm:mx-auto sm:w-full sm:max-w-md text-center">
+        <h1 class="text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-primary-600 to-indigo-600 dark:from-primary-400 dark:to-indigo-400">
+            404
+        </h1>
+        <h2 class="mt-4 text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Page Not Found</h2>
+        <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+            Oops! The link or page you are looking for doesn't exist or has been moved.
+        </p>
+    </div>
+</div>
+</body>
+<script src="https://cdn.jsdelivr.net/gh/kenchou2006/ZLink/static/js/theme-toggle.js"></script>
+</html>

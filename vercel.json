@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "env": {
+    "GIN_MODE": "release"
+  },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/main"
+    }
+  ]
+}
