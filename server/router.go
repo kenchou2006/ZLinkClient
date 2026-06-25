@@ -65,23 +65,32 @@ type linkCacheValue struct {
 	URL      string  `json:"url"`
 	ID       int64   `json:"id"`
 	CachedAt float64 `json:"cached_at"`
+	// Unix seconds; 0 means the link never expires.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
 }
 
-func getOriginalURL(ctx context.Context, db *sql.DB, tableName, codeCol, urlCol, code string) (int64, string, error) {
+// expired reports whether a cached link has passed its expiry time.
+func (c linkCacheValue) expired() bool {
+	return c.ExpiresAt != 0 && time.Now().Unix() >= c.ExpiresAt
+}
+
+func getOriginalURL(ctx context.Context, db *sql.DB, tableName, codeCol, urlCol, code string) (int64, string, sql.NullTime, error) {
+	var expiresAt sql.NullTime
 	if err := validateIdentifier(tableName); err != nil {
-		return 0, "", err
+		return 0, "", expiresAt, err
 	}
 	if err := validateIdentifier(codeCol); err != nil {
-		return 0, "", err
+		return 0, "", expiresAt, err
 	}
 	if err := validateIdentifier(urlCol); err != nil {
-		return 0, "", err
+		return 0, "", expiresAt, err
 	}
-	query := fmt.Sprintf("SELECT id, %s FROM %s WHERE %s = $1 LIMIT 1", urlCol, tableName, codeCol)
+	// expires_at is a fixed Django field; NULL means the link never expires.
+	query := fmt.Sprintf("SELECT id, %s, expires_at FROM %s WHERE %s = $1 LIMIT 1", urlCol, tableName, codeCol)
 	var id int64
 	var original string
-	err := db.QueryRowContext(ctx, query, code).Scan(&id, &original)
-	return id, original, err
+	err := db.QueryRowContext(ctx, query, code).Scan(&id, &original, &expiresAt)
+	return id, original, expiresAt, err
 }
 
 // Config holds runtime configuration for the router.
@@ -228,6 +237,11 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 						var cached linkCacheValue
 						jerr := json.Unmarshal([]byte(val), &cached)
 						if jerr == nil {
+							if cached.expired() {
+								// Stale/expired: drop the key and fall through to DB (which will 404).
+								redisClient.Del(r.Context(), k)
+								break
+							}
 							if !cachePersistent {
 								if err := redisClient.Expire(r.Context(), k, cacheTTL).Err(); err != nil {
 									log.Printf("Cache touch failed for key %s: %v", k, err)
@@ -251,10 +265,17 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 				render404(w, r)
 				return
 			}
-			id, orig, err := getOriginalURL(r.Context(), db, tableName, codeCol, urlCol, rootCode)
+			id, orig, expiresAt, err := getOriginalURL(r.Context(), db, tableName, codeCol, urlCol, rootCode)
 			if err == nil {
+				if expiresAt.Valid && !expiresAt.Time.After(time.Now()) {
+					render404(w, r)
+					return
+				}
 				if redisClient != nil {
 					cached := linkCacheValue{URL: orig, ID: id, CachedAt: float64(time.Now().Unix())}
+					if expiresAt.Valid {
+						cached.ExpiresAt = expiresAt.Time.Unix()
+					}
 					b, jerr := json.Marshal(cached)
 					if jerr == nil {
 						canonical := variants[0]
@@ -295,6 +316,11 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 					var cached linkCacheValue
 					jerr := json.Unmarshal([]byte(val), &cached)
 					if jerr == nil {
+						if cached.expired() {
+							// Stale/expired: drop the key and fall through to DB (which will 404).
+							redisClient.Del(r.Context(), k)
+							break
+						}
 						if !cachePersistent {
 							if err := redisClient.Expire(r.Context(), k, cacheTTL).Err(); err != nil {
 								log.Printf("Cache touch failed for key %s: %v", k, err)
@@ -318,7 +344,7 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 			render404(w, r)
 			return
 		}
-		id, orig, err := getOriginalURL(r.Context(), db, tableName, codeCol, urlCol, code)
+		id, orig, expiresAt, err := getOriginalURL(r.Context(), db, tableName, codeCol, urlCol, code)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				render404(w, r)
@@ -331,8 +357,17 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 			return
 		}
 
+		// Expired links are treated as not found.
+		if expiresAt.Valid && !expiresAt.Time.After(time.Now()) {
+			render404(w, r)
+			return
+		}
+
 		if redisClient != nil {
 			cached := linkCacheValue{URL: orig, ID: id, CachedAt: float64(time.Now().Unix())}
+			if expiresAt.Valid {
+				cached.ExpiresAt = expiresAt.Time.Unix()
+			}
 			b, jerr := json.Marshal(cached)
 			if jerr == nil {
 				canonical := variants[0]
