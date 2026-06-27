@@ -249,7 +249,7 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 							}
 							// cache hit: report GA with source=cache
 							gaSendEvent(gaClient, r, cached.URL, fullShortURL(r), "cache")
-							http.Redirect(w, r, cached.URL, http.StatusFound)
+							redirect(w, r, cached.URL, cached.ExpiresAt != 0)
 							return
 						}
 						// invalid format: treat as cache miss (do not return), log and continue to DB
@@ -287,7 +287,7 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 					}
 				}
 				gaSendEvent(gaClient, r, orig, fullShortURL(r), "db")
-				http.Redirect(w, r, orig, http.StatusFound)
+				redirect(w, r, orig, expiresAt.Valid)
 				return
 			}
 			if err == sql.ErrNoRows {
@@ -328,7 +328,7 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 						}
 						// cache hit: report GA with source=cache
 						gaSendEvent(gaClient, r, cached.URL, fullShortURL(r), "cache")
-						http.Redirect(w, r, cached.URL, http.StatusFound)
+						redirect(w, r, cached.URL, cached.ExpiresAt != 0)
 						return
 					}
 					// invalid format: treat as cache miss (do not return), log and continue to DB
@@ -382,7 +382,7 @@ func NewRouter(db *sql.DB, redisClient *redis.Client, tableName, codeCol, urlCol
 		}
 
 		gaSendEvent(gaClient, r, orig, fullShortURL(r), "db")
-		http.Redirect(w, r, orig, http.StatusFound)
+		redirect(w, r, orig, expiresAt.Valid)
 	})
 
 	return top
@@ -409,6 +409,32 @@ func resolve404Path() string {
 		}
 	}
 	return ""
+}
+
+// redirectCacheControl is the Cache-Control applied to successful redirects so
+// Vercel's Edge Network can serve repeat hits without invoking the function.
+// Kept moderate (5 minutes) since the CDN edge cache has no purge hook tied
+// to Redis/DB updates — a changed or deleted link can keep resolving to the
+// stale destination at the edge for up to this long.
+const redirectCacheControl = "public, max-age=300, s-maxage=300, stale-while-revalidate=60"
+
+// redirectCacheControlExpiring is used for links that have an expires_at set.
+// Kept short (30s, no stale-while-revalidate) so the CDN edge stops serving a
+// link soon after it actually expires, rather than for up to 5 minutes.
+const redirectCacheControlExpiring = "public, max-age=30, s-maxage=30"
+
+// redirect sets Cache-Control before issuing the redirect so successful
+// lookups (cache or DB) are eligible for CDN caching; expired-link checks
+// happen before this is called, so only resolvable, non-expired links here.
+// hasExpiry should be true when the link has an expires_at set, to use a
+// shorter TTL than links that never expire.
+func redirect(w http.ResponseWriter, r *http.Request, url string, hasExpiry bool) {
+	if hasExpiry {
+		w.Header().Set("Cache-Control", redirectCacheControlExpiring)
+	} else {
+		w.Header().Set("Cache-Control", redirectCacheControl)
+	}
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func render404(w http.ResponseWriter, r *http.Request) {
