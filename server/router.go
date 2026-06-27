@@ -95,17 +95,19 @@ func getOriginalURL(ctx context.Context, db *sql.DB, tableName, codeCol, urlCol,
 
 // Config holds runtime configuration for the router.
 type Config struct {
-	TableName       string
-	CodeColumn      string
-	URLColumn       string
-	CacheKeyPrefix  string
-	CacheVersion    string
-	CachePersistent bool
-	CacheTTL        time.Duration
-	GAMeasurementID string
-	GAAPISecret     string
-	GATimeout       time.Duration
-	GAAsync         bool
+	TableName            string
+	CodeColumn           string
+	URLColumn            string
+	CacheKeyPrefix       string
+	CacheVersion         string
+	CachePersistent      bool
+	CacheTTL             time.Duration
+	EdgeCacheTTL         time.Duration
+	EdgeCacheTTLExpiring time.Duration
+	GAMeasurementID      string
+	GAAPISecret          string
+	GATimeout            time.Duration
+	GAAsync              bool
 }
 
 // LoadConfigFromEnv reads environment variables and returns Config with defaults.
@@ -144,6 +146,25 @@ func LoadConfigFromEnv() Config {
 		cacheTTL = time.Duration(cacheTTLsec) * time.Second
 	}
 
+	// EDGE_CACHE_TTL controls the Cache-Control max-age/s-maxage on redirect
+	// responses (Vercel Edge Network caching), in seconds. Defaults to 30.
+	// EDGE_CACHE_TTL_EXPIRING is the same but for links with an expires_at
+	// set; defaults to EDGE_CACHE_TTL's value when not set separately, so a
+	// shorter TTL can be reintroduced for expiring links without affecting
+	// the default.
+	edgeCacheTTLSec := 30
+	if v := strings.TrimSpace(os.Getenv("EDGE_CACHE_TTL")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			edgeCacheTTLSec = n
+		}
+	}
+	edgeCacheTTLExpiringSec := edgeCacheTTLSec
+	if v := strings.TrimSpace(os.Getenv("EDGE_CACHE_TTL_EXPIRING")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			edgeCacheTTLExpiringSec = n
+		}
+	}
+
 	gaMeasurementID := strings.TrimSpace(os.Getenv("GA_MEASUREMENT_ID"))
 	gaAPISecret := strings.TrimSpace(os.Getenv("GA_API_SECRET"))
 
@@ -161,22 +182,25 @@ func LoadConfigFromEnv() Config {
 	}
 
 	return Config{
-		TableName:       tableName,
-		CodeColumn:      codeCol,
-		URLColumn:       urlCol,
-		CacheKeyPrefix:  cacheKeyPrefix,
-		CacheVersion:    cacheVersion,
-		CachePersistent: cachePersistent,
-		CacheTTL:        cacheTTL,
-		GAMeasurementID: gaMeasurementID,
-		GAAPISecret:     gaAPISecret,
-		GATimeout:       gaTimeout,
-		GAAsync:         gaAsync,
+		TableName:            tableName,
+		CodeColumn:           codeCol,
+		URLColumn:            urlCol,
+		CacheKeyPrefix:       cacheKeyPrefix,
+		CacheVersion:         cacheVersion,
+		CachePersistent:      cachePersistent,
+		CacheTTL:             cacheTTL,
+		EdgeCacheTTL:         time.Duration(edgeCacheTTLSec) * time.Second,
+		EdgeCacheTTLExpiring: time.Duration(edgeCacheTTLExpiringSec) * time.Second,
+		GAMeasurementID:      gaMeasurementID,
+		GAAPISecret:          gaAPISecret,
+		GATimeout:            gaTimeout,
+		GAAsync:              gaAsync,
 	}
 }
 
 // NewRouterFromConfig convenience wrapper that builds the router from a Config.
 func NewRouterFromConfig(db *sql.DB, redisClient *redis.Client, cfg Config) http.Handler {
+	setEdgeCacheControl(cfg.EdgeCacheTTL, cfg.EdgeCacheTTLExpiring)
 	return NewRouter(db, redisClient, cfg.TableName, cfg.CodeColumn, cfg.URLColumn, cfg.CacheKeyPrefix, cfg.CacheVersion, cfg.CachePersistent, cfg.CacheTTL, newGA4ClientFromConfig(cfg))
 }
 
@@ -413,14 +437,27 @@ func resolve404Path() string {
 
 // redirectCacheControl / redirectCacheControlExpiring are the Cache-Control
 // values applied to successful redirects so Vercel's Edge Network can serve
-// repeat hits without invoking the function. Both are currently 30s — kept as
-// separate constants (rather than one) so a longer TTL can be reintroduced
-// for non-expiring links later without re-threading a parameter through
-// every call site. Short for now since the CDN edge cache has no purge hook
-// tied to Redis/DB updates — a changed or deleted link can keep resolving to
-// the stale destination at the edge for up to this long.
-const redirectCacheControl = "public, max-age=30, s-maxage=30"
-const redirectCacheControlExpiring = "public, max-age=30, s-maxage=30"
+// repeat hits without invoking the function. Set by setEdgeCacheControl from
+// Config (EDGE_CACHE_TTL / EDGE_CACHE_TTL_EXPIRING, default 30s each) — kept
+// as separate vars so a longer TTL can be configured for non-expiring links
+// later without re-threading a parameter through every call site. Short by
+// default since the CDN edge cache has no purge hook tied to Redis/DB
+// updates — a changed or deleted link can keep resolving to the stale
+// destination at the edge for up to this long.
+var redirectCacheControl = buildCacheControl(30 * time.Second)
+var redirectCacheControlExpiring = buildCacheControl(30 * time.Second)
+
+func buildCacheControl(ttl time.Duration) string {
+	secs := int(ttl.Seconds())
+	return fmt.Sprintf("public, max-age=%d, s-maxage=%d", secs, secs)
+}
+
+// setEdgeCacheControl recomputes the Cache-Control values from config. Called
+// once from NewRouterFromConfig before the router starts serving requests.
+func setEdgeCacheControl(ttl, ttlExpiring time.Duration) {
+	redirectCacheControl = buildCacheControl(ttl)
+	redirectCacheControlExpiring = buildCacheControl(ttlExpiring)
+}
 
 // redirect sets Cache-Control before issuing the redirect so successful
 // lookups (cache or DB) are eligible for CDN caching; expired-link checks
