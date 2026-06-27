@@ -411,23 +411,21 @@ func resolve404Path() string {
 	return ""
 }
 
-// redirectCacheControl is the Cache-Control applied to successful redirects so
-// Vercel's Edge Network can serve repeat hits without invoking the function.
-// Kept moderate (5 minutes) since the CDN edge cache has no purge hook tied
-// to Redis/DB updates — a changed or deleted link can keep resolving to the
-// stale destination at the edge for up to this long.
-const redirectCacheControl = "public, max-age=300, s-maxage=300, stale-while-revalidate=60"
-
-// redirectCacheControlExpiring is used for links that have an expires_at set.
-// Kept short (30s, no stale-while-revalidate) so the CDN edge stops serving a
-// link soon after it actually expires, rather than for up to 5 minutes.
+// redirectCacheControl / redirectCacheControlExpiring are the Cache-Control
+// values applied to successful redirects so Vercel's Edge Network can serve
+// repeat hits without invoking the function. Both are currently 30s — kept as
+// separate constants (rather than one) so a longer TTL can be reintroduced
+// for non-expiring links later without re-threading a parameter through
+// every call site. Short for now since the CDN edge cache has no purge hook
+// tied to Redis/DB updates — a changed or deleted link can keep resolving to
+// the stale destination at the edge for up to this long.
+const redirectCacheControl = "public, max-age=30, s-maxage=30"
 const redirectCacheControlExpiring = "public, max-age=30, s-maxage=30"
 
 // redirect sets Cache-Control before issuing the redirect so successful
 // lookups (cache or DB) are eligible for CDN caching; expired-link checks
 // happen before this is called, so only resolvable, non-expired links here.
-// hasExpiry should be true when the link has an expires_at set, to use a
-// shorter TTL than links that never expire.
+// hasExpiry should be true when the link has an expires_at set.
 func redirect(w http.ResponseWriter, r *http.Request, url string, hasExpiry bool) {
 	if hasExpiry {
 		w.Header().Set("Cache-Control", redirectCacheControlExpiring)
