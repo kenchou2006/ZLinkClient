@@ -1,14 +1,15 @@
 # ZLinkClient
 
-The fast redirect engine for the [ZLink](../ZLink) URL shortener.
+The fast redirect engine for the ZLink URL shortener.
 
 **ZLinkClient** is a small, dependency-light Go service whose only job is to
 resolve short codes and redirect end users as quickly as possible. It reads
 from the same PostgreSQL database and Redis cache as the management API, so
 links created through the admin UI or API are served here instantly.
 
-> Link/user **management** lives in the Django API ([ZLink](../ZLink)); the
-> admin interface is [ZLinkFE](../ZLinkFE). This service is intentionally
+> Link/user **management** lives in the Django API
+> ([ZLinkAPI](https://github.com/kenchou2006/ZLinkAPI)); the admin interface
+> is [ZLinkFE](https://github.com/kenchou2006/ZLinkFE). This service is intentionally
 > read-only and stateless.
 
 ## How it works
